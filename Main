@@ -1,0 +1,106 @@
+# File: torn_pda_market_api.py
+from flask import Flask, request, jsonify
+import requests
+from statistics import mean, stdev
+
+app = Flask(__name__)
+
+# Torn API Base URL and API Key
+TORN_API_BASE = "https://api.torn.com"
+API_KEY = "ZH54qhUhBlH4wARj"
+
+def fetch_market_data(item_id):
+    """
+    Fetch raw market data from the Torn API for a given item ID.
+    """
+    endpoint = f"{TORN_API_BASE}/market/{item_id}"
+    params = {"selections": "market", "key": API_KEY}
+    response = requests.get(endpoint, params=params)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return None
+
+@app.route('/market-data/<int:item_id>', methods=['GET'])
+def get_market_data(item_id):
+    """
+    Fetch raw market data and return it in a format that Torn PDA can display.
+    """
+    market_data = fetch_market_data(item_id)
+    if not market_data:
+        return jsonify({"error": "Failed to fetch market data"}), 400
+    return jsonify(market_data)
+
+@app.route('/trend-analysis/<int:item_id>', methods=['GET'])
+def trend_analysis(item_id):
+    """
+    Analyze market trends for a given item ID and return the results.
+    """
+    market_data = fetch_market_data(item_id)
+    if not market_data:
+        return jsonify({"error": "Failed to fetch market data"}), 400
+
+    # Extract prices from both bazaar and item market data
+    bazaar_prices = [entry['price'] for entry in market_data.get('bazaar', [])]
+    item_market_prices = [entry['price'] for entry in market_data.get('itemmarket', [])]
+    all_prices = bazaar_prices + item_market_prices
+
+    if not all_prices:
+        return jsonify({"error": "No price data available for this item"}), 404
+
+    # Analyze trends
+    avg_price = mean(all_prices)
+    price_change = ((max(all_prices) - min(all_prices)) / min(all_prices)) * 100 if min(all_prices) > 0 else 0
+    volatility = stdev(all_prices) if len(all_prices) > 1 else 0
+
+    return jsonify({
+        "item_id": item_id,
+        "average_price": avg_price,
+        "price_change_percentage": price_change,
+        "volatility": volatility,
+        "data_points": len(all_prices),
+    })
+
+@app.route('/compare-trends', methods=['POST'])
+def compare_trends():
+    """
+    Compare market trends for multiple items.
+    Expected JSON payload: {"item_ids": [123, 456]}
+    """
+    data = request.json
+    item_ids = data.get("item_ids", [])
+    if not item_ids or len(item_ids) < 2:
+        return jsonify({"error": "At least two item IDs are required for comparison"}), 400
+
+    results = []
+    for item_id in item_ids:
+        market_data = fetch_market_data(item_id)
+        if not market_data:
+            continue
+
+        prices = [entry['price'] for entry in market_data.get('bazaar', []) + market_data.get('itemmarket', [])]
+        if prices:
+            avg_price = mean(prices)
+            price_change = ((max(prices) - min(prices)) / min(prices)) * 100 if min(prices) > 0 else 0
+            volatility = stdev(prices) if len(prices) > 1 else 0
+            results.append({
+                "item_id": item_id,
+                "average_price": avg_price,
+                "price_change_percentage": price_change,
+                "volatility": volatility,
+            })
+
+    return jsonify({"comparison": results})
+
+@app.route('/', methods=['GET'])
+def home():
+    """
+    Home route for API testing.
+    """
+    return jsonify({
+        "status": "API is running",
+        "message": "Use endpoints like /market-data/<item_id> or /trend-analysis/<item_id> to fetch data."
+    })
+
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=8000, debug=True)
